@@ -1,6 +1,6 @@
 const allowedTemplates = new Set(["romance","hero","space","cyber","premiere","magic"]);
 const json=(data,status=200,headers={})=>new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store",...headers}});
-function cors(origin,env){const permitted=origin===env.FRONTEND_ORIGIN;return permitted?{"Access-Control-Allow-Origin":origin,"Vary":"Origin","Access-Control-Allow-Headers":"Authorization,Content-Type","Access-Control-Allow-Methods":"GET,POST,OPTIONS"}:{};}
+function cors(origin,env){const permitted=origin===env.FRONTEND_ORIGIN;return permitted?{"Access-Control-Allow-Origin":origin,"Vary":"Origin","Access-Control-Allow-Headers":"Authorization,Content-Type","Access-Control-Allow-Methods":"GET,POST,DELETE,OPTIONS"}:{};}
 const bytes=s=>new TextEncoder().encode(s);
 function safeEqual(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a[i]^b[i];return d===0;}
 function hexToBytes(hex){if(!/^[0-9a-f]+$/i.test(hex)||hex.length%2)return new Uint8Array();return Uint8Array.from(hex.match(/../g).map(h=>parseInt(h,16)));}
@@ -51,6 +51,47 @@ export default {async fetch(request,env){
  const id=crypto.randomUUID();
  await env.DB.prepare("INSERT INTO jobs(id,user_id,template_id,cost,status) VALUES(?,?,?,0,'completed')").bind(id,user.id,body.template_id).run();
  return json({id,status:"completed",demo:true,no_video:true},201,headers);
+ }
+ 
+ if(url.pathname==="/drafts"&&request.method==="POST"){
+  if(env.DEMO_MODE!=="true")throw {code:404,message:"NOT_FOUND"};
+  if(!env.PHOTOS)throw {code:503,message:"STORAGE_NOT_CONFIGURED"};
+  const size=Number(request.headers.get("Content-Length")||0);
+  if(size>9*1024*1024)throw {code:413,message:"BODY_TOO_LARGE"};
+  const form=await request.formData().catch(()=>null);
+  const template=form?.get("template_id");
+  const consent=form?.get("consent");
+  const file=form?.get("photo");
+  if(!allowedTemplates.has(template))throw {code:400,message:"INVALID_TEMPLATE"};
+  if(consent!=="true")throw {code:400,message:"CONSENT_REQUIRED"};
+  if(!file||typeof file.arrayBuffer!=="function"||typeof file.size!=="number")throw {code:400,message:"PHOTO_REQUIRED"};
+  if(file.size<100||file.size>8*1024*1024)throw {code:413,message:"INVALID_PHOTO_SIZE"};
+  const types={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"};
+  const ext=types[file.type];
+  if(!ext)throw {code:415,message:"INVALID_PHOTO_TYPE"};
+  const buf=await file.arrayBuffer();
+  const arr=new Uint8Array(buf);
+  const jpg=arr[0]===255&&arr[1]===216&&arr[2]===255;
+  const png=arr[0]===137&&arr[1]===80&&arr[2]===78&&arr[3]===71&&arr[4]===13&&arr[5]===10&&arr[6]===26&&arr[7]===10;
+  const webp=String.fromCharCode(...arr.slice(0,4))==="RIFF"&&String.fromCharCode(...arr.slice(8,12))==="WEBP";
+  if(!({jpg,png,webp}[ext]))throw {code:415,message:"INVALID_PHOTO_CONTENT"};
+  const daily=await env.DB.prepare("SELECT COUNT(*) AS count FROM jobs WHERE user_id=? AND created_at>=datetime('now','-1 day')").bind(user.id).first();
+  if(Number(daily?.count||0)>=20)throw {code:429,message:"DAILY_LIMIT_REACHED"};
+  const id=crypto.randomUUID();
+  const key="drafts/"+user.id+"/"+id+"."+ext;
+  await env.PHOTOS.put(key,buf,{httpMetadata:{contentType:file.type},customMetadata:{purpose:"unprocessed-draft"}});
+  try{
+   await env.DB.prepare("INSERT INTO jobs(id,user_id,template_id,cost,status,image_key) VALUES(?,?,?,0,'draft',?)").bind(id,user.id,template,key).run();
+  }catch(e){await env.PHOTOS.delete(key);throw e;}
+  return json({id,status:"draft",video_generated:false,charged:false},201,headers);
+ }
+ const draftId=url.pathname.match(/^\/drafts\/([0-9a-f-]{36})$/)?.[1];
+ if(draftId&&request.method==="DELETE"){
+  const existing=await env.DB.prepare("SELECT id,image_key,status FROM jobs WHERE id=? AND user_id=?").bind(draftId,user.id).first();
+  if(!existing||existing.status!=="draft")throw {code:404,message:"DRAFT_NOT_FOUND"};
+  await env.DB.prepare("DELETE FROM jobs WHERE id=? AND user_id=? AND status='draft'").bind(draftId,user.id).run();
+  if(existing.image_key&&env.PHOTOS)await env.PHOTOS.delete(existing.image_key);
+  return json({deleted:true},200,headers);
  }
  if(url.pathname==="/jobs"&&request.method==="POST"){
  return json({error:"GENERATION_NOT_CONFIGURED",message:"No real uploads or credit deductions are enabled yet."},503,headers);
