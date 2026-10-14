@@ -50,3 +50,39 @@ test("demo order rejects unknown template",async()=>{
  const r=await worker.fetch(request("/demo/orders",{method:"POST",headers:{Authorization:await auth(),"Content-Type":"application/json"},body:JSON.stringify({template_id:"unknown"})}),env());
  assert.equal(r.status,400);
 });
+
+function photoRequest({type="image/png",bytes=[137,80,78,71,13,10,26,10],consent="true",template="space"}={}){
+ const form=new FormData();const data=new Uint8Array([...bytes,...new Array(110).fill(7)]);
+ form.append("photo",new Blob([data],{type}),"portrait.png");
+ form.append("template_id",template);if(consent!==null)form.append("consent",consent);
+ return form;
+}
+function storageEnv(){
+ const e=env();const objects=new Map();
+ e.PHOTOS={async put(key,buf){objects.set(key,buf)},async delete(key){objects.delete(key)}};
+ const previous=e.DB.prepare;
+ e.DB.prepare=(sql)=>{if(sql.startsWith("SELECT id,image_key,status FROM jobs"))return {bind(){return {async first(){return {id:"11111111-1111-4111-8111-111111111111",image_key:"drafts/1234/file.png",status:"draft"}}}}};return previous(sql)};
+ return {env:e,objects};
+}
+test("valid image produces private unpaid draft",async()=>{
+ const {env:e,objects}=storageEnv();
+ const r=await worker.fetch(request("/drafts",{method:"POST",headers:{Authorization:await auth()},body:photoRequest()}),e);
+ assert.equal(r.status,201);const d=await r.json();
+ assert.equal(d.status,"draft");assert.equal(d.charged,false);assert.equal(d.video_generated,false);
+ assert.equal(objects.size,1);
+});
+test("draft rejects consent missing",async()=>{
+ const {env:e,objects}=storageEnv();
+ const r=await worker.fetch(request("/drafts",{method:"POST",headers:{Authorization:await auth()},body:photoRequest({consent:null})}),e);
+ assert.equal(r.status,400);assert.equal(objects.size,0);
+});
+test("draft rejects forged image bytes",async()=>{
+ const {env:e,objects}=storageEnv();
+ const r=await worker.fetch(request("/drafts",{method:"POST",headers:{Authorization:await auth()},body:photoRequest({bytes:[4,5,6,7,8,9,10,11]})}),e);
+ assert.equal(r.status,415);assert.equal(objects.size,0);
+});
+test("draft deletion checks authenticated user scope",async()=>{
+ const {env:e}=storageEnv();
+ const r=await worker.fetch(request("/drafts/11111111-1111-4111-8111-111111111111",{method:"DELETE",headers:{Authorization:await auth()}}),e);
+ assert.equal(r.status,200);assert.equal((await r.json()).deleted,true);
+});

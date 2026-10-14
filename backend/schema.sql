@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS jobs (
  id TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
  template_id TEXT NOT NULL, cost INTEGER NOT NULL,
- status TEXT NOT NULL CHECK(status IN ('queued','processing','completed','failed')),
+ status TEXT NOT NULL CHECK(status IN ('draft','queued','processing','completed','failed')),
  image_key TEXT, result_url TEXT, error TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
