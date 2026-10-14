@@ -1,0 +1,16 @@
+name = "tsunami-studio-api"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tsunami-studio-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "tsunami-studio-photos"
+
+[vars]
+FRONTEND_ORIGIN = "https://xmeduza777.github.io"
+DEMO_MODE = "true"
